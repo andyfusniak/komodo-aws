@@ -1,21 +1,20 @@
 <?php
-set_include_path(
-    '.'
-    . ':./library'
-);
-
-require_once 'Zend/Loader/Autoloader.php';
-$loader = Zend_Loader_Autoloader::getInstance();
-$loader->registerNamespace('Siamgeo_');
-
 $config['profile'] = 'japan';  // change to 'live', 'japan', 'beta' etc
 
 $config['japan']['siamgeo'] = array(
     'appdir' => '/var/www/japan.komodo-aws',
     'applog' => '/var/www/japan.komodo-aws/data/logs/siamgeo.log',
     'customersDataDir' => '/var/www/japan.komodo-aws/data/customers',
+    'configInitFilepath' => '/var/www/japan.komodo-aws/server-scripts/config-init.txt',
+    'serverTemplateDir' => '/var/www/japan.komodo-aws/server-templates',
     'debug' => true
 );
+
+set_include_path(
+    '.:'
+    . $config['japan']['siamgeo']['appdir'] . '/library'
+);
+
 
 $config['japan']['ec2'] = array(
     'key'    => 'AKIAJKJFVF55XL3CPDWQ',
@@ -35,6 +34,10 @@ $config['japan']['siamgeo']['regionToAmiMappings'] = array(
         'ap-southeast-1' => 'ami-a4ca8df6'
     )
 );
+
+require_once 'Zend/Loader/Autoloader.php';
+$loader = Zend_Loader_Autoloader::getInstance();
+$loader->registerNamespace('Siamgeo_');
 
 $db = Zend_Db::factory('Pdo_Mysql', array(
     'host'             => 'localhost',

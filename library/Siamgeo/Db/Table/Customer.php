@@ -26,6 +26,19 @@ class Siamgeo_Db_Table_Customer extends Zend_Db_Table_Abstract
         }
     }
 
+    public function getAllCustomers()
+    {
+        $query = $this->select()
+                      ->order('idCustomer ASC');
+        try {
+            $rowset = $this->fetchAll($query);
+
+            return $rowset;
+        } catch (Exception $e) {
+            throw $e;
+        }
+    }
+
     public function getCustomerByCustomerId($idCustomer)
     {
         $query = $this->select()

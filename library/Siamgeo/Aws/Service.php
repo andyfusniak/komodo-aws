@@ -21,15 +21,18 @@ class Siamgeo_Aws_Service
         'sa-east-1'      => AmazonEC2::REGION_SA_E1
     );
 
+    /**
+     * $param AmazonEC2 $ec2
+     * @param Zend_Config $config
+     */
     public function __construct($ec2, $config)
     {
         $this->_ec2 = $ec2;
-        $configProfile = $config['profile'];
 
-        $this->_customersDataDir = $config[$configProfile]['siamgeo']['customersDataDir'];
+        $this->_customersDataDir = $config->customersDataDir;
 
-        $currentAmiSet = $config[$configProfile]['siamgeo']['currentAmiSet'];
-        $this->_regionMappings = $config[$configProfile]['siamgeo']['regionToAmiMappings'][$currentAmiSet];
+        $currentAmiSet = $config->currentAmiSet;
+        $this->_regionMappings = $config->regionAmiMap->$currentAmiSet->toArray();
     }
 
     public function setLogger($logger)
@@ -38,6 +41,17 @@ class Siamgeo_Aws_Service
         return $this;
     }
 
+    /**
+     * Sets the context for the future service call methods
+     *
+     * @param string $region the region to be used e.g. us-west1, ap-northeast-1
+     * @param string $username the username of the customer
+     * @param int $idProfile the profile id (primary key in the database)
+     *
+     * @throws Exception
+     *
+     * @return Siamgeo_Aws_Service fluent interface
+     */
     public function setContext($region, $username, $idProfile)
     {
         $this->_region = $region;
@@ -47,7 +61,7 @@ class Siamgeo_Aws_Service
         if (isset($this->_regionMappings[$region])) {
             $this->_amiName = $this->_regionMappings[$region];
         } else {
-            if ($this->_logger) $this->_logger->emerg('Unknown region passed: ' . $region);
+            if ($this->_logger) $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') Unknown region passed: ' . $region);
             throw new Exception('Unknown region ' . $region);
         }
 
@@ -57,7 +71,7 @@ class Siamgeo_Aws_Service
         if (isset($this->_shortRegionToLongRegionMappings[$region])) {
             $queueUrl = $this->_shortRegionToLongRegionMappings[$region];
         } else {
-            if ($this->_logger) $this->_logger->emerg('Cannot find queue URL for region: ' . $region);
+            if ($this->_logger) $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') Cannot find queue URL for region: ' . $region);
             throw new Exception('Cannot find queue URL for region ' . $region);
         }
 
@@ -67,6 +81,12 @@ class Siamgeo_Aws_Service
         return $this;
     }
 
+    /**
+     * Allocates an ip address
+     *
+     * @throws Exception
+     * @return Siamgeo_Aws_Service fluent interface
+     */
     public function allocateIpAddress()
     {
         // allocate a new ip addres
@@ -75,28 +95,39 @@ class Siamgeo_Aws_Service
         if ($response->isOK()) {
             return (string) $response->body->publicIp;
         } else {
-            if ($this->_logger) $this->_logger->emerg('failed to allocate an ip');
+            if ($this->_logger) $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') failed to allocate an ip');
             throw new Exception('failed to allocate an ip');
         }
 
         return $this;
     }
 
+    /**
+     * Creates a new security group for the current context
+     * using the format ackme-000005 as the group name
+     *
+     * @param boolean $includeSsl if true then opens ports 443 in the security group settings
+     * @throws Exception
+     * @return Siamgeo_Aws_Service fluent interface
+     */
     public function createSecurityGroup($includeSsl = false)
     {
         if ((null === $this->_region) || (null === $this->_groupName)) {
-            if ($this->_logger) $this->_logger->emerg('Failed to call setContext before calling createSecurityGroup');
+            if ($this->_logger) $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') Failed to call setContext before calling createSecurityGroup');
 
             throw new Exception('You must call setContext first before calling this function');
         }
 
-        if ($this->_logger) $this->_logger->info('create a security group for ' );
+        if ($this->_logger) $this->_logger->info(__FILE__ . '(' . __LINE__ .') Attempting to create a security group for ' . $this->_groupName);
 
         // create a security group for this profile
         $response = $this->_ec2->create_security_group($this->_groupName, $this->_groupName);
+
         if ($response->isOK()) {
             $groupId = (string) $response->body->groupId;
             $requestId = (string) $response->body->requestId;
+        } else {
+            throw new Exception('Failed to create security group for ' . $this->_groupName);
         }
 
         // open SSH (Port 22) and HTTP (Port 80)
@@ -136,27 +167,32 @@ class Siamgeo_Aws_Service
 
         $response = $this->_ec2->authorize_security_group_ingress($securityGroupOptions);
         if (!$response->isOK()) {
-            if ($this->_logger) $this->_logger->emerg('authorize_security_group_ingress failed');
+            if ($this->_logger) $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') authorize_security_group_ingress failed');
             throw new Exception("Response not OK");
         }
+
+        return $this;
     }
 
     public function createKeyPair()
     {
         // Create a Key Pair and write the .pem file to the file system
         $response = $this->_ec2->create_key_pair($this->_groupName);
+
         if ($response->isOK()) {
             if (isset($response->body->keyMaterial)) {
                 $usernameDir = $this->_customersDataDir . DIRECTORY_SEPARATOR . $this->_username;
 
                 if (!file_exists($usernameDir)) {
                     mkdir($usernameDir);
+                    chgrp($usernameDir, 'devteam');
                     chmod($usernameDir, 0777);
                 }
 
                 $profileDir = $usernameDir . DIRECTORY_SEPARATOR . sprintf("%06d", $this->_idProfile);
                 if (!file_exists($profileDir)) {
                     mkdir($profileDir);
+                    chgrp($profileDir, 'devteam');
                     chmod($profileDir, 0777);
                 }
 
@@ -165,34 +201,53 @@ class Siamgeo_Aws_Service
 
                 // write the file to file system e.g customers/ackme/000001/ackme-000001.pem
                 if (!file_put_contents($fullpath, (string) $response->body->keyMaterial, LOCK_EX)) {
-                    if ($this->_logger) $this->_logger->alert('Failed to write the ' . $keyName . ' file to the filesystem path = ' . $fullpath);
+                    if ($this->_logger) $this->_logger->alert(__FILE__ . '(' . __LINE__ .') Failed to write the ' . $keyName . ' file to the filesystem path = ' . $fullpath);
 
                     throw new Exception('Failed to write the ' . $keyName . ' file to the filesystem path = ' . $fullpath);
                 }
+
+                chgrp($fullpath, 'devteam');
             }
         } else {
             if ($this->_logger) $this->_logger->emerg('call to create_key_pair failed');
             throw new Exception("Response not OK");
         }
+
+        return $this;
     }
 
-    public function runInstances($instanceType)
+    /**
+     * Lanches a new ec2 instance given the instance type
+     * uses the security group set by the context
+     * e.g. ackme-000005
+     *
+     * @param string $instanceType the type of ec2 instance to launch e.g. t1.micro, m1.small etc
+     * @param string $userData base64 encoded user data to be used when launching
+     * @throws Exception
+     * @return array an assoicative array of response values
+     */
+    public function runInstances($instanceType, $userData = null)
     {
         // Run an instance
-        if ($this->_logger) $this->_logger->debug(__CLASS__ . ' - Attempting to start ec2 instance with ami=' . $this->_amiName .', instanceType=' . $instanceType);
+        if ($this->_logger) $this->_logger->debug(__FILE__ . '(' . __LINE__ .') - Attempting to start ec2 instance with ami=' . $this->_amiName .', instanceType=' . $instanceType);
 
-        $response = $this->_ec2->run_instances($this->_amiName, 1, 1, array(
-            'KeyName'            => $this->_groupName,
-            'SecurityGroup'      => $this->_groupName,
-            'InstanceType'       => $instanceType,
-            'Monitoring.Enabled' => false,
+        $options = array(
+            'KeyName'               => $this->_groupName,
+            'SecurityGroup'         => $this->_groupName,
+            'InstanceType'          => $instanceType,
+            'Monitoring.Enabled'    => false,
             'DisableApiTermination' => false
-        ));
+        );
+
+        // add the UserData entry is it's sent
+        if ($userData)
+            $options['UserData'] = $userData;
+
+        $response = $this->_ec2->run_instances($this->_amiName, 1, 1, $options);
 
         if (!$response->isOK()) {
-            if ($this->_logger) $this->_logger->emerg('call to run_instances failed');
-
-            throw new Exception("Response not OK");
+            throw new Exception("Response not OK. Call to AWS SDK run_instances failed");
+            var_dump($response);
         }
 
         $body = $response->body;
@@ -208,7 +263,7 @@ class Siamgeo_Aws_Service
             'launchTime'        => (string) $body->instancesSet->item->launchTime,
             'instanceStateCode' => (string) $body->instancesSet->item->instanceState->code,
             'instanceStateName' => (string) $body->instancesSet->item->instanceState->name,
-            'reservationId' => (string) $response->body->reservationId,
+            'reservationId'     => (string) $response->body->reservationId,
         );
 
         return $instanceData;
@@ -216,7 +271,7 @@ class Siamgeo_Aws_Service
 
     public function describeInstances($instanceName)
     {
-        if ($this->_logger) $this->_logger->debug(__CLASS__ . ' - Attempting to describe_instance with instanceName=' . $instanceName);
+        if ($this->_logger) $this->_logger->debug(__FILE__ . '(' . __LINE__ .') Attempting to describe_instance with instanceName=' . $instanceName);
         $response = $this->_ec2->describe_instances(array(
             'InstanceId' => $instanceName,
         ));
@@ -232,7 +287,7 @@ class Siamgeo_Aws_Service
         $privateDnsName = (string) $response->body->reservationSet->item->instancesSet->item->privateDnsName;
         $dnsName        = (string) (string) $response->body->reservationSet->item->instancesSet->item->dnsName;
 
-        if ($this->_logger) $this->_logger->debug(__CLASS__ . ' - describe_instance returned code=' . $code . ', name=' . $name . ', privateDnsName=' . $privateDnsName . ', dnsName=' . $dnsName);
+        if ($this->_logger) $this->_logger->debug(__FILE__ . '(' . __LINE__ .') describe_instance returned code=' . $code . ', name=' . $name . ', privateDnsName=' . $privateDnsName . ', dnsName=' . $dnsName);
 
         return array(
             'code'           => $code,
@@ -246,7 +301,7 @@ class Siamgeo_Aws_Service
     {
         $response = $this->_ec2->associate_address($instanceName, $publicIp);
         if (!$response->isOK()) {
-            if ($this->_logger) $this->_logger->emerg('call to associate_address failed');
+            if ($this->_logger) $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') call to associate_address failed');
 
             throw new Exception("Response not OK");
         }

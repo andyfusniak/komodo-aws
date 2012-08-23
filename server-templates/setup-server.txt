@@ -1,0 +1,50 @@
+#!/bin/bash
+cd /tmp
+wget http://www.magentocommerce.com/downloads/assets/1.7.0.2/magento-1.7.0.2.tar.bz2
+tar xjf magento-1.7.0.2.tar.gz
+
+sudo chown ubuntu:ubuntu /var/www
+sudo rm /var/www/index.html
+sudo mv /tmp/magento /var/www/%domain-name%
+sudo chown ubuntu:ubuntu %domain-name%
+sudo chmod 755 %domain-name%
+
+cd %domain-name%
+chmod -R o+w media var
+chmod o+w app/etc
+
+sudo a2dissite 000-default
+sudo a2ensite %domain-name%
+sudo a2enmod cache
+sudo a2enmod headers
+sudo a2enmod expires
+sudo a2enmod rewrite
+sudo a2enmod ssl
+sudo service apache2 restart
+
+mysqladmin -uroot create magento
+
+php -f install.php -- --license_agreement_accepted yes \
+--locale "%locale%"
+--timezone "%timezone%" \
+--default_currency "%default-currency%" \
+--db_host localhost \
+--db_name magento \
+--db_user root \
+--db_pass "%db-pass%" \
+--db_prefix magento_ \
+--skip_url_validation yes \
+--url "%url%" \
+--secure_base_url "%secure-base-url%" \
+--use_rewrites yes \
+--use_secure no \
+--use_secure_admin no \
+--enable_charts yes \
+--session_save files \
+--admin_frontname "%admin-frontname%" \
+--admin_firstname "%admin-firstname%" \
+--admin_lastname "%admin-lastname%" \
+--admin_email "%admin-email%" \
+--admin_username "%admin-username%" \
+--admin_password "%admin-password%" \
+--encryption_key "%encryption-key%"

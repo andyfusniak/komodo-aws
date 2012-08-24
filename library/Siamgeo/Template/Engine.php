@@ -66,11 +66,10 @@ class Siamgeo_Template_Engine
     {
         $this->_username = $username;
         $this->_idProfile  = $idProfile;
-
         return $this;
     }
 
-    public function saveTemplate($template, $filename)
+    public function saveTemplate($template, $filename, $mode = null)
     {
         if (!isset($this->_customerDataDir))
             throw new Exception("CustomerDataDirectory not set");
@@ -78,12 +77,16 @@ class Siamgeo_Template_Engine
         if (!isset($this->_templates[$template]))
             throw new Exception("Template " . $template . " has not been loaded");
 
-        $fullpath = $this->_customerDataDir . DIRECTORY_SEPARATOR
-                  . $this->_username
-                  . DIRECTORY_SEPARATOR . sprintf("%06d", $this->_idProfile);
+        $fullpath = $this->_customerDataDir
+                  . DIRECTORY_SEPARATOR . $this->_username
+                  . DIRECTORY_SEPARATOR . $this->_idProfile;
 
         if (!file_put_contents($fullpath . DIRECTORY_SEPARATOR . $filename, $this->_templates[$template], LOCK_EX))
             throw new Exception("Failed to write template file " . $fullpath);
+
+        if ($mode) {
+            chmod($fullpath . DIRECTORY_SEPARATOR . $filename, $mode);
+        }
 
         return $this;
     }

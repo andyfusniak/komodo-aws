@@ -148,8 +148,17 @@ class Siamgeo_Deploy
     {
         if ($remoteFile)
             return $this->_output[$remoteFile];
-            
+
         return $this->_output;
+    }
+
+    public function saveOutput($remoteFile, $outFile)
+    {
+        $output = $this->getOutput($remoteFile);
+
+        if (!file_put_contents($outFile, $output, LOCK_EX)) {
+            throw new Exception('Failed to write ' . $remoteFile . ' to ' . $outFile);
+        }
     }
 
     public function executeSchedule()

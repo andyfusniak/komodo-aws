@@ -18,8 +18,13 @@ $ec2 = new AmazonEC2(array(
     'secret' => $config->ec2->secret
 ));
 
+// ami service is used to convert region names to ami names using the DB
+$amiService = new Siamgeo_Service_AmiService(
+    new Siamgeo_Db_Table_Ami()
+);
+
 // initiate our custom made service and pass in the EC2 object
-$awsService = new Siamgeo_Aws_Service($ec2, $config);
+$awsService = new Siamgeo_Aws_Service($ec2, $amiService, $config);
 $templateEngine = new Siamgeo_Template_Engine($config->serverTemplateDir);
 $profileConfigDataService = new Siamgeo_Service_ProfileConfigDataService(new Siamgeo_Db_Table_ProfileConfigData());
 $deployer = new Siamgeo_Deploy($logger);
@@ -45,12 +50,11 @@ if ($siamgeo['logger'])
 $profilesTable = new Siamgeo_Db_Table_Profile();
 $rowset = $profilesTable->getAllNonCompletedProfiles();
 
-if ($logger) $logger->info(__FILE__ . '(' . __LINE__ . ') +++++++++++++++++++++++$i+++++++++++++++ START ++++++++++++++++++++++++++++++++++++++');
+if ($logger) $logger->info(__FILE__ . '(' . __LINE__ . ') ++++++++++++++++++++++++++++++++++++++ START ++++++++++++++++++++++++++++++++++++++');
 
 if (sizeof($rowset) == 0) {
     if ($logger) $logger->info(__FILE__ . '(' . __LINE__ . ') Nothing to process in the Profiles table');
 }
-
 
 
 // loop through all the non-completed profiles for all customers
@@ -109,10 +113,10 @@ foreach ($rowset as $row) {
     // launch the instance
     if ($engine->getCurrentStatus() == Siamgeo_Db_Table_Profile::PASSED_KEY_PAIR_GENERATED) {
         if ($logger)
-            $logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . sprintf("%06d", $row->idProfile) . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_KEY_PAIR_GENERATED . '" status so attempting to run instance');
+            $logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . $row->idProfile . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_KEY_PAIR_GENERATED . '" status so attempting to run instance');
 
         try {
-            $engine->launchInstance($config->configInitFilepath);
+            $engine->launchInstance($config->configInitFilepath, $config->useCloudInit);
         } catch (Exception $e) {
             if ($logger) {
                 $logger->emerg(__FILE__ . '(' . __LINE__ . ') ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
@@ -125,7 +129,7 @@ foreach ($rowset as $row) {
     // describe instances
     if ($engine->getCurrentStatus() == Siamgeo_Db_Table_Profile::PASSED_INSTANCE_STARTED) {
         if ($logger)
-            $logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . sprintf("%06d", $row->idProfile) . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_INSTANCE_STARTED . '" status so attempting to associate the public ip to the instance');
+            $logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . $row->idProfile . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_INSTANCE_STARTED . '" status so attempting to associate the public ip to the instance');
 
         try {
             $engine->describeInstances();
@@ -138,6 +142,7 @@ foreach ($rowset as $row) {
         }
     }
 
+    // generate the templates (apache temp vhost, vhost, setup script etc)
     if ($engine->getCurrentStatus() == Siamgeo_Db_Table_Profile::PASSED_ASSOCIATED_ADDRESS) {
         try {
             $engine->generateTemplateFiles($config->customersDataDir);
@@ -152,11 +157,9 @@ foreach ($rowset as $row) {
 
     if ($engine->getCurrentStatus() == Siamgeo_Db_Table_Profile::PASSED_GENERATED_DEPLOY_FILES) {
         try {
-            $engine->transferAndExcute(
-                $config->ssh->username,
-                $config->ssh->publickey,
-                $config->ssh->privatekey
-            );
+            if ($logger) $logger->debug(__FILE__ . '(' . __LINE__ . ') Calling runRemoteSetup(' . $config->customersDataDir . ')');
+
+            $engine->executeRemoteSetup($config->customersDataDir);
         } catch (Exception $e) {
             if ($logger) {
                 $logger->emerg(__FILE__ . '(' . __LINE__ . ') ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());

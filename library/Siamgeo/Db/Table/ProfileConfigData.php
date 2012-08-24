@@ -4,7 +4,7 @@ class Siamgeo_Db_Table_ProfileConfigData extends Zend_Db_Table_Abstract
     protected $_name = 'ProfileConfigData';
     protected $_primary = 'idProfileConfigData';
 
-    public function addProfileConfigData($idProfile, $name, $value, $groupName = null)
+    public function addProfileConfigData($idProfile, $name, $value)
     {
         $nowExpr  = new Zend_Db_Expr('NOW()');
         $nullExpr = new Zend_Db_Expr('NULL');
@@ -12,7 +12,6 @@ class Siamgeo_Db_Table_ProfileConfigData extends Zend_Db_Table_Abstract
         $data = array(
             'idProfileConfigData' => $nullExpr,
             'idProfile'           => (int) $idProfile,
-            'groupName'           => ((null == $groupName) ? $nullExpr : $groupName),
             'name'                => $name,
             'value'               => $value,
             'added'               => $nowExpr,
@@ -48,20 +47,10 @@ class Siamgeo_Db_Table_ProfileConfigData extends Zend_Db_Table_Abstract
         }
     }
 
-    public function getAllProfileConfigDataByProfileId($idProfile, $groupName = null)
+    public function getAllProfileConfigDataByProfileId($idProfile)
     {
         $query = $this->select()
                       ->where('idProfile = ?', (int) $idProfile);
-
-
-        if ($groupName) {
-            if (is_array($groupName)) {
-                $query->where('groupName IN (?)', $groupName);
-            } else {
-                $query->where('groupName = ?', $groupName);
-            }
-        }
-
         try {
             $rowset = $this->fetchAll($query);
 
@@ -71,15 +60,12 @@ class Siamgeo_Db_Table_ProfileConfigData extends Zend_Db_Table_Abstract
         }
     }
 
-    public function updateProfileConfigData($idProfile, $name, $value, $groupName = null)
+    public function updateProfileConfigData($idProfile, $name, $value)
     {
         $params = array(
             'value'   => $value,
             'updated' => new Zend_Db_Expr('NOW()')
         );
-
-        if ($groupName)
-            $params['groupName'] = $groupName;
 
         $where = $this->getAdapter()->quoteInto('idProfile = ?', (int) $idProfile);
         $where .= $this->getAdapter()->quoteInto(' AND name = ?', $name);

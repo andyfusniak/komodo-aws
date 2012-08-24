@@ -1,5 +1,5 @@
 <?php
-class Siamgeo_Scheduler_Engine
+class Siamgeo_Scheduler_Engine extends Siamgeo_Log_Abstract
 {
     /**
      * @var AmazonEC2
@@ -14,11 +14,7 @@ class Siamgeo_Scheduler_Engine
 
     private $_tables = array();
 
-    /**
-     * @var Zend_Log
-     */
-    private $_logger;
-
+    private $_currentUsername;
     private $_currentGroupName;
 
     private $_state;
@@ -91,7 +87,8 @@ class Siamgeo_Scheduler_Engine
 
     public function setLogger(Zend_Log $logger)
     {
-        $this->_logger = $logger;
+        parent::setLogger($logger);
+
         $this->_awsService->setLogger($logger);
         return $this;
     }
@@ -121,7 +118,8 @@ class Siamgeo_Scheduler_Engine
 
         $username = $this->_usernameLookup[$idCustomer];
 
-        $this->_currentGroupName = $username . '-' . sprintf("%06d", $idProfile);
+        $this->_currentUsername  = $username;
+        $this->_currentGroupName = $username . '-' . $idProfile;
 
         $this->_state[$this->_currentGroupName] = $options;
 
@@ -136,7 +134,6 @@ class Siamgeo_Scheduler_Engine
 
             if ($this->_debug) throw $e;
         }
-
     }
 
     private function getTable($tableName)
@@ -165,10 +162,20 @@ class Siamgeo_Scheduler_Engine
         return $this->_state[$this->_currentGroupName]['status'];
     }
 
+    public function getCurrentUsername()
+    {
+        return $this->_currentUsername;
+    }
+
+    public function getCurrentGroupName()
+    {
+        return $this->_currentGroupName;
+    }
+
     public function allocateIpAddress()
     {
         $idProfile = $this->getState('idProfile');
-        if ($this->_logger) $this->_logger->info(__FILE__ . ' - ' . 'Profile: ' . sprintf("%06d", $idProfile) . ' is in "' . Siamgeo_Db_Table_Profile::PENDING . '" status so attempting to allocate ip address');
+        if ($this->_logger) $this->_logger->info(__FILE__ . ' - ' . 'Profile: ' . $idProfile . ' is in "' . Siamgeo_Db_Table_Profile::PENDING . '" status so attempting to allocate ip address');
 
         try {
             $publicIp = $this->_awsService->allocateIpAddress();
@@ -210,7 +217,7 @@ class Siamgeo_Scheduler_Engine
     public function createKeyPair()
     {
         if ($this->_logger)
-            $this->_logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . sprintf("%06d", $this->getState('idProfile')) . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_SECURITY_GROUP_CREATED . '" status so attempting to create a new key pair');
+            $this->_logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . $this->getState('idProfile') . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_SECURITY_GROUP_CREATED . '" status so attempting to create a new key pair');
 
         try {
             $this->_awsService->createKeyPair();
@@ -227,19 +234,24 @@ class Siamgeo_Scheduler_Engine
         }
     }
 
-    public function launchInstance($configInitFilepath)
+    public function launchInstance($configInitFilepath, $useCloudInit)
     {
         if ($this->_logger)
-            $this->_logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . sprintf("%06d", $this->getState('idProfile')) . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_KEY_PAIR_GENERATED . '" status so attempting to run instance');
+            $this->_logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . $this->getState('idProfile') . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_KEY_PAIR_GENERATED . '" status so attempting to run instance');
 
         try {
             $instanceTable = $this->getTable('Instance');
 
-            $configInit = base64_encode(file_get_contents($configInitFilepath));
-
-            if (!$configInit) {
+            if ($useCloudInit) {
+                $configInit = base64_encode(file_get_contents($configInitFilepath));
+                if (!$configInit) {
+                    if ($this->_logger)
+                        $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') failed to load the config-init file ' . $configInitFilepath);
+                }
+            } else {
+                $configInit = null;
                 if ($this->_logger)
-                    $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') failed to load the config-init file ' . $configInitFilepath);
+                    $this->_logger->notice(__FILE__ . '(' . __LINE__ .') Launching with cloud-init mode off');
             }
 
             $instanceData = $this->_awsService->runInstances($this->getState('instanceType'), $configInit);
@@ -262,38 +274,62 @@ class Siamgeo_Scheduler_Engine
 
     public function describeInstances()
     {
-
         if ($this->_logger)
-            $this->_logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . sprintf("%06d", $this->getState('idProfile')) . ' is in "' . Siamgeo_Db_Table_Profile::PASSED_INSTANCE_STARTED . '" status so attempting to associate the public ip to the instance');
+            $this->_logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . $this->getState('idProfile') . " is in '" . Siamgeo_Db_Table_Profile::PASSED_INSTANCE_STARTED . "' state so attempting to associate the public ip to the instance");
 
         try {
             $instanceTable = $this->getTable('Instance');
+            $profileConfigDataTable = $this->getTable('ProfileConfigData');
+            $profileConfigDataService = new Siamgeo_Service_ProfileConfigDataService($profileConfigDataTable);
+
 
             // lookup the running instance the instance name will be format of 'i-1234656'
             $instanceRow = $instanceTable->getActiveInstanceByProfileId($this->getState('idProfile'));
 
             // check to make sure the instance is in the running state before
             // attempting to associate the public ip to the instance name
+            // check to make sure the instance is in the running state before
             $instanceResponseData = $this->_awsService->describeInstances($instanceRow->instanceName);
-
-            // update the instance status whatever happens
-            $instanceTable->updateStatus($instanceRow->idInstance,
-                $instanceResponseData['code'],
-                $instanceResponseData['name'],
-                $instanceResponseData['privateDnsName'],
-                $instanceResponseData['dnsName']
-            );
 
             // If the instance is running then
             // attempt to assiciate the instance to the public ip
             if ($instanceResponseData['code'] == 16) {
                 $this->_awsService->associateAddress($instanceRow->instanceName, $this->getState('publicIp'));
 
+                $instanceResponseData = $this->_awsService->describeInstances($instanceRow->instanceName);
+
+                // update the instance status whatever happens
+                $instanceTable->updateStatus($instanceRow->idInstance,
+                    $instanceResponseData['code'],
+                    $instanceResponseData['name'],
+                    $instanceResponseData['privateDnsName'],
+                    $instanceResponseData['dnsName']
+                );
+
+                // use the new dnsName to fill in the config data for the magento and temp apache vhost
+                $profileConfigDataService->setConfig($this->getState('idProfile'),
+                    'url',
+                    'http://' . $instanceResponseData['dnsName'],
+                    'magento'
+                );
+
+                $profileConfigDataService->setConfig($this->getState('idProfile'),
+                    'secure-base-url',
+                    'http://' . $instanceResponseData['dnsName'],
+                    'magento'
+                );
+
+                $profileConfigDataService->setConfig($this->getState('idProfile'),
+                    'temp-server-name',
+                    $instanceResponseData['dnsName'],
+                    'temp-apache'
+                );
+
                 $this->_profileTbl->updateStatus($this->getState('idProfile'), Siamgeo_Db_Table_Profile::PASSED_ASSOCIATED_ADDRESS);
                 $this->setState('status', Siamgeo_Db_Table_Profile::PASSED_ASSOCIATED_ADDRESS);
             } else {
                 if ($this->_logger)
-                    $this->_logger->notice(__FILE__ . '(' . __LINE__ .') Profile: ' . sprintf("%06d", $this->getState('idProfile')) . ' is waiting for instance.  Instance is current in "' . $instanceResponseData['name'] . '" state.');
+                    $this->_logger->notice(__FILE__ . '(' . __LINE__ .') Profile: ' . $this->getState('idProfile') . ' is waiting for instance.  Instance is currently in "' . $instanceResponseData['name'] . '" state.');
             }
         } catch (Exception $e) {
             if ($this->_logger) {
@@ -309,7 +345,11 @@ class Siamgeo_Scheduler_Engine
     {
         try {
             $username = $this->_usernameLookup[$this->getState('idCustomer')];
-            $this->_templateService->processTemplates($username, $this->getState('idProfile'), $customersDataDir);
+
+            $options = array(
+                'customersDataDir' => $customersDataDir
+            );
+            $this->_templateService->processTemplates($username, $this->getState('idProfile'), $options);
 
             $this->_profileTbl->updateStatus($this->getState('idProfile'), Siamgeo_Db_Table_Profile::PASSED_GENERATED_DEPLOY_FILES);
             $this->setState('status', Siamgeo_Db_Table_Profile::PASSED_GENERATED_DEPLOY_FILES);
@@ -319,27 +359,68 @@ class Siamgeo_Scheduler_Engine
                 $this->_logger->emerg(__FILE__ . '(' . __LINE__ . ') ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
                 $this->_logger->emerg(__FILE__ . '(' . __LINE__ . ') ' . $e->getTraceAsString());
             }
-            if ($debug) throw $e;
+            if ($this->_debug) throw $e;
         }
     }
 
-    public function transferAndExcute($username, $publickey, $privatekey)
+    private function profileDirectory($customersDataDir)
+    {
+        return $customersDataDir . DIRECTORY_SEPARATOR . $this->_usernameLookup[$this->getState('idCustomer')]
+                . DIRECTORY_SEPARATOR . $this->getState('idProfile');
+    }
+
+    public function executeRemoteSetup($customersDataDir)
+    {
+        $profileDir = $customersDataDir
+                    . DIRECTORY_SEPARATOR . $this->_usernameLookup[$this->getState('idCustomer')]
+                    . DIRECTORY_SEPARATOR . $this->getState('idProfile');
+
+        $cmd = $profileDir . DIRECTORY_SEPARATOR . 'go.sh';
+
+        // excute the remote script and log the result
+        $log = shell_exec(escapeshellcmd($cmd));
+
+        $logFile = $profileDir . DIRECTORY_SEPARATOR . 'go.log';
+        if (!file_put_contents($logFile, $log, LOCK_EX)) {
+            if ($this->_logger) {
+                $this->_logContext();
+                $this->_logger->alert(__FILE__ . '(' . __LINE__ . ') Failed to write server "go" file ' . $logFile);
+            }
+        }
+    }
+
+    // **** DEPRECATED ****
+
+    public function transferAndExcute($customersDataDir, $username, $publickey, $privatekey)
     {
         $instanceTbl = $this->getTable('Instance');
-        
+        $instanceRow = $instanceTbl->getActiveInstanceByProfileId($this->getState('idProfile'));
+
         try {
-            $this->_deployer->setHost('ec2-54-251-48-107.ap-southeast-1.compute.amazonaws.com');
+            $profileDirectory = $this->profileDirectory($customersDataDir);
+
+            $this->_deployer->setHost($instanceRow->dnsName);
             $this->_deployer->setUsername($username);
             $this->_deployer->setPublicKey($publickey);
             $this->_deployer->setPrivateKey($privatekey);
-            $this->_deployer->addTransfer('/var/www/japan.komodo-aws/payload.sh', '/home/ubuntu/payload.sh', 0744);
-            $this->_deployer->addTransfer('/var/www/japan.komodo-aws/payload.sh', '/home/ubuntu/payload2.sh', 0744);
-            $this->_deployer->addTransfer('/var/www/japan.komodo-aws/payload.sh', '/home/ubuntu/payload3.sh', 0724);
-            $this->_deployer->addTransfer('/var/www/japan.komodo-aws/payload.sh', '/home/ubuntu/payload4.sh', 0745);
-            $this->_deployer->addTransfer('/var/www/japan.komodo-aws/payload.sh', '/home/ubuntu/payload5.sh', 0746);
-            $this->_deployer->scheduleFile('/home/ubuntu/payload.sh');
+
+            $this->_deployer->addTransfer(
+                $profileDirectory . DIRECTORY_SEPARATOR . 'server-setup.sh',
+                '/home/ubuntu/server-setup.sh',
+                0744
+            );
+
+            $domainName = $this->getState('domainName');
+            $this->_deployer->addTransfer(
+                $profileDirectory . DIRECTORY_SEPARATOR . $domainName,
+                '/home/ubuntu/' . $domainName,
+                0744
+            );
+
+            $this->_deployer->scheduleFile('/home/ubuntu/server-setup.sh');
             $this->_deployer->sendFiles();
-            $this->_deployer->executeSchedule();
+            //$this->_deployer->executeSchedule();
+            //$this->_deployer->saveOutput('/home/ubuntu/server-setup.sh', $profileDirectory . DIRECTORY_SEPARATOR . 'server-setup.log');
 
             $this->_profileTbl->updateStatus($this->getState('idProfile'), Siamgeo_Db_Table_Profile::PASSED_EXECUTED_AND_SENT_FILES);
             $this->setState('status', Siamgeo_Db_Table_Profile::PASSED_EXECUTED_AND_SENT_FILES);
@@ -356,7 +437,7 @@ class Siamgeo_Scheduler_Engine
     public function complete()
     {
         if ($this->_logger) {
-            $this->_logger->info(__FILE__ . '(' . __LINE__ .') Profile: ' . sprintf("%06d", $this->getState('idProfile') . ' is in "' . $this->getState('status') . '" status so we are done and marking the profile as complete'));
+            $this->_logger->info(__FILE__ . '(' . __LINE__ . ') Profile: ' . $this->getState('idProfile') . ' is in "' . $this->getState('status') . ' status so we are done and marking the profile as complete');
             $this->_profileTbl->updateStatus($this->getState('idProfile'), Siamgeo_Db_Table_Profile::COMPLETED);
             $this->setState('status', Siamgeo_Db_Table_Profile::COMPLETED);
         }

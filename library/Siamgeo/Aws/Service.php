@@ -25,14 +25,12 @@ class Siamgeo_Aws_Service
      * $param AmazonEC2 $ec2
      * @param Zend_Config $config
      */
-    public function __construct($ec2, $config)
+    public function __construct($ec2, $amiService, $config)
     {
         $this->_ec2 = $ec2;
 
         $this->_customersDataDir = $config->customersDataDir;
-
-        $currentAmiSet = $config->currentAmiSet;
-        $this->_regionMappings = $config->regionAmiMap->$currentAmiSet->toArray();
+        $this->_regionMappings = $amiService->getRegionAmiList();
     }
 
     public function setLogger($logger)
@@ -65,8 +63,8 @@ class Siamgeo_Aws_Service
             throw new Exception('Unknown region ' . $region);
         }
 
-        // create the group name in the format ackme-000002
-        $this->_groupName = $username . '-' . sprintf("%06d", (int) $idProfile);
+        // create the group name in the format ackme-2
+        $this->_groupName = $username . '-' . $idProfile;
 
         if (isset($this->_shortRegionToLongRegionMappings[$region])) {
             $queueUrl = $this->_shortRegionToLongRegionMappings[$region];
@@ -174,6 +172,9 @@ class Siamgeo_Aws_Service
         return $this;
     }
 
+    /**
+     * @return Siamgeo_Aws_Service fluent interface
+     */
     public function createKeyPair()
     {
         // Create a Key Pair and write the .pem file to the file system
@@ -189,7 +190,7 @@ class Siamgeo_Aws_Service
                     chmod($usernameDir, 0777);
                 }
 
-                $profileDir = $usernameDir . DIRECTORY_SEPARATOR . sprintf("%06d", $this->_idProfile);
+                $profileDir = $usernameDir . DIRECTORY_SEPARATOR . $this->_idProfile;
                 if (!file_exists($profileDir)) {
                     mkdir($profileDir);
                     chgrp($profileDir, 'devteam');
@@ -197,16 +198,34 @@ class Siamgeo_Aws_Service
                 }
 
                 $keyName = (string) $response->body->keyName;
-                $fullpath = $profileDir . DIRECTORY_SEPARATOR . $keyName . '.pem';
 
-                // write the file to file system e.g customers/ackme/000001/ackme-000001.pem
-                if (!file_put_contents($fullpath, (string) $response->body->keyMaterial, LOCK_EX)) {
-                    if ($this->_logger) $this->_logger->alert(__FILE__ . '(' . __LINE__ .') Failed to write the ' . $keyName . ' file to the filesystem path = ' . $fullpath);
+                // write the file to file system e.g customers/ackme/1/ackme-000001.pem
+                $privateKeyString = (string) $response->body->keyMaterial;
 
-                    throw new Exception('Failed to write the ' . $keyName . ' file to the filesystem path = ' . $fullpath);
+                $privateKeyFullPath = $profileDir . DIRECTORY_SEPARATOR . $keyName . '.pem';
+
+                if (!file_put_contents($privateKeyFullPath, $privateKeyString, LOCK_EX)) {
+                    if ($this->_logger) $this->_logger->alert(__FILE__ . '(' . __LINE__ .') Failed to write the private key ' . $keyName . '.pem file to the file system '. $privateKeyFullPath);
+
+                    throw new Exception('Failed to write the ' . $keyName . '.pem file to the filesystem path = ' . $privateKeyFullPath);
                 }
+                chgrp($privateKeyFullPath, 'devteam');
 
-                chgrp($fullpath, 'devteam');
+                // extract the public key from the private key (.pem file)
+                $privResource = openssl_pkey_get_private($privateKeyString);
+                $details = openssl_pkey_get_details($privResource);
+                $publicKeyString = $details['key'];
+
+                $publicKeyFullPath = $profileDir . DIRECTORY_SEPARATOR . $keyName . '.pub';
+
+                if (!file_put_contents($publicKeyFullPath, $publicKeyString, LOCK_EX)) {
+                    if ($this->_logger) $this->_logger->alert(__FILE__ . '(' . __LINE__ .') Failed to write the public key ' . $keyName . '.pub file to the file system ' . $publicKeyFullPath);
+
+                    throw new Exception('Failed to write the ' . $keyName . '.pub file to the filesystem path = ' . $publicKeyFullPath);
+                }
+                chgrp($publicKeyFullPath, 'devteam');
+
+
             }
         } else {
             if ($this->_logger) $this->_logger->emerg('call to create_key_pair failed');
@@ -229,7 +248,7 @@ class Siamgeo_Aws_Service
     public function runInstances($instanceType, $userData = null)
     {
         // Run an instance
-        if ($this->_logger) $this->_logger->debug(__FILE__ . '(' . __LINE__ .') - Attempting to start ec2 instance with ami=' . $this->_amiName .', instanceType=' . $instanceType);
+        if ($this->_logger) $this->_logger->debug(__FILE__ . '(' . __LINE__ .') userData=' . (($userData == null) ? 'null' : $userData));
 
         $options = array(
             'KeyName'               => $this->_groupName,
@@ -242,6 +261,14 @@ class Siamgeo_Aws_Service
         // add the UserData entry is it's sent
         if ($userData)
             $options['UserData'] = $userData;
+
+        // debug logging for diagnosis
+        if ($this->_logger) $this->_logger->debug(__FILE__ . '(' . __LINE__ .') Attempting to launch ec2 instance { ami=' . $this->_amiName .', instanceType=' . $instanceType . ' }');
+        if ($this->_logger) {
+            foreach ($options as $n=>$v) {
+                $this->_logger->debug(__FILE__ . '(' . __LINE__ .') $options[' . $n .']=' . $v);
+            }
+        }
 
         $response = $this->_ec2->run_instances($this->_amiName, 1, 1, $options);
 

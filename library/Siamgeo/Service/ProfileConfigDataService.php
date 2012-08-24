@@ -8,23 +8,23 @@ class Siamgeo_Service_ProfileConfigDataService
         $this->_profileConfigDataTable = $profileConfigDataTable;
     }
 
-    public function setConfig($idProfile, $name, $value, $groupName = null)
+    public function setConfig($idProfile, $name, $value)
     {
         $row = $this->_profileConfigDataTable->getProfileConfigDataByName($idProfile, $name);
 
         if (null === $row) {
-            $this->_profileConfigDataTable->addProfileConfigData($idProfile, $name, $value, $groupName);
+            $this->_profileConfigDataTable->addProfileConfigData($idProfile, $name, $value);
         } else {
-            $this->_profileConfigDataTable->updateProfileConfigData($idProfile, $name, $value, $groupName);
+            $this->_profileConfigDataTable->updateProfileConfigData($idProfile, $name, $value);
         }
 
         return $this;
     }
 
-    public function setConfigList($idProfile, $list, $groupName = null)
+    public function setConfigList($idProfile, $list)
     {
         foreach ($list as $name=>$value) {
-            $this->setConfig($idProfile, $name, $value, $groupName);
+            $this->setConfig($idProfile, $name, $value);
         }
 
         return $this;
@@ -34,11 +34,11 @@ class Siamgeo_Service_ProfileConfigDataService
      * @param int $idProfile the profile id
      * @return array an associative array of name/value pairs for this profile
      */
-    public function getConfigList($idProfile, $groupName = null)
+    public function getConfigList($idProfile)
     {
         $hashMap = array();
 
-        $rowset = $this->_profileConfigDataTable->getAllProfileConfigDataByProfileId($idProfile, $groupName);
+        $rowset = $this->_profileConfigDataTable->getAllProfileConfigDataByProfileId($idProfile);
         foreach ($rowset as $row) {
             $hashMap[$row->name] = $row->value;
         }

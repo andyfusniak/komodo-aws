@@ -34,7 +34,8 @@ class Siamgeo_Db_Table_Profile extends Zend_Db_Table_Abstract
     public function getAllNonCompletedProfiles()
     {
         $query = $this->select()
-                      ->where('status != ?', 'completed');
+                      ->where('status != ?', 'completed')
+                      ->order('added ASC');
         try {
             $rowset = $this->fetchAll($query);
 

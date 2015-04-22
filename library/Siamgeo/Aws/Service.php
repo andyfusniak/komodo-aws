@@ -108,7 +108,7 @@ class Siamgeo_Aws_Service
      * @throws Exception
      * @return Siamgeo_Aws_Service fluent interface
      */
-    public function createSecurityGroup($includeSsl = false)
+    public function createSecurityGroup($includeSsl = true)
     {
         if ((null === $this->_region) || (null === $this->_groupName)) {
             if ($this->_logger) $this->_logger->emerg(__FILE__ . '(' . __LINE__ .') Failed to call setContext before calling createSecurityGroup');

@@ -181,6 +181,7 @@ class Siamgeo_Scheduler_Engine extends Siamgeo_Log_Abstract
             $publicIp = $this->_awsService->allocateIpAddress();
 
             $this->_profileTbl->updatePublicIp($idProfile, $publicIp);
+            $this->setState('publicIp', $publicIp);
             $this->_profileTbl->updateStatus($idProfile, Siamgeo_Db_Table_Profile::PASSED_ALLOCATED_IP_ADDRESS);
 
             $this->setState('status', Siamgeo_Db_Table_Profile::PASSED_ALLOCATED_IP_ADDRESS);
@@ -337,7 +338,7 @@ class Siamgeo_Scheduler_Engine extends Siamgeo_Log_Abstract
                 $this->_logger->emerg(__FILE__ . '(' . __LINE__ . ') ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
                 $this->_logger->emerg(__FILE__ . '(' . __LINE__ . ') ' . $e->getTraceAsString());
             }
-            if ($this->debug) throw $e;
+            if ($this->_debug) throw $e;
         }
     }
 
@@ -387,6 +388,9 @@ class Siamgeo_Scheduler_Engine extends Siamgeo_Log_Abstract
                 $this->_logger->alert(__FILE__ . '(' . __LINE__ . ') Failed to write server "go" file ' . $logFile);
             }
         }
+
+        $this->_profileTbl->updateStatus($this->getState('idProfile'), Siamgeo_Db_Table_Profile::PASSED_EXECUTED_AND_SENT_FILES);
+        $this->setState('status', Siamgeo_Db_Table_Profile::PASSED_EXECUTED_AND_SENT_FILES);
     }
 
     // **** DEPRECATED ****

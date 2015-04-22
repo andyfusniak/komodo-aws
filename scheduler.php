@@ -5,6 +5,13 @@ require_once 'setup.php';
 require_once 'AwsSdk/sdk.class.php';
 require_once 'AwsSdk/services/ec2.class.php';
 
+// prevent multiple copies of this program running simultaneously
+$fhLock = fopen($config->lockFile, "w");
+if (!flock($fhLock, LOCK_EX|LOCK_NB)) {
+    echo "The application lockfile is in place which means I'm already running an instance" . PHP_EOL;
+    die();
+}
+
 $debug  = (bool) $config->debug;
 $logger = $siamgeo['logger'];
 
@@ -179,3 +186,5 @@ $endTime = time();
 $timeElapsed = $endTime - $startTime;
 if ($logger) $logger->info(__FILE__ . '(' . __LINE__ .') Took ' . $timeElapsed . ' seconds to execute');
 if ($logger) $logger->info(__FILE__ . '(' . __LINE__ .') ++++++++++++++++++++++++++++++++++++++ END ++++++++++++++++++++++++++++++++++++++ at ');
+
+fclose($fhLock);
